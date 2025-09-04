@@ -1,0 +1,5 @@
+Flask==3.0.0
+opencv-python==4.9.0.80
+pandas==2.1.4
+Pillow==10.1.0
+Werkzeug==3.0.1

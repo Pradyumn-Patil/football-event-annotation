@@ -1,0 +1,160 @@
+body {
+    background-color: #f8f9fa;
+}
+
+.upload-zone {
+    border: 2px dashed #dee2e6;
+    border-radius: 8px;
+    padding: 40px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+    background-color: white;
+}
+
+.upload-zone:hover {
+    border-color: #0d6efd;
+    background-color: #f0f8ff;
+}
+
+.upload-zone.dragover {
+    border-color: #0d6efd;
+    background-color: #e7f3ff;
+    transform: scale(1.02);
+}
+
+.upload-zone.has-file {
+    border-color: #198754;
+    background-color: #f0fff4;
+}
+
+#frameDisplay {
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+    transition: opacity 0.3s;
+}
+
+.navigation-controls {
+    background-color: #f8f9fa;
+    padding: 15px;
+    border-radius: 4px;
+    margin-top: 15px;
+}
+
+.annotation-controls {
+    background-color: #fff;
+    padding-top: 15px;
+}
+
+.annotation-list {
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+.annotation-item {
+    background-color: white;
+    transition: all 0.2s;
+    cursor: pointer;
+}
+
+.annotation-item:hover {
+    background-color: #f0f8ff;
+    transform: translateX(5px);
+}
+
+.frame-range {
+    width: 100%;
+}
+
+#videoContainer {
+    min-height: 300px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+}
+
+.loading-spinner {
+    display: inline-block;
+    width: 1rem;
+    height: 1rem;
+    border: 0.2em solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spinner-border 0.75s linear infinite;
+}
+
+@keyframes spinner-border {
+    to { transform: rotate(360deg); }
+}
+
+.keyboard-shortcuts {
+    font-size: 0.875rem;
+}
+
+.keyboard-shortcuts td:first-child {
+    font-family: monospace;
+    font-weight: bold;
+    background-color: #f8f9fa;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+/* Frame number input */
+#frameInput {
+    text-align: center;
+}
+
+/* Body part select */
+#bodyPartSelect {
+    font-weight: 500;
+}
+
+/* Export button animation */
+#exportCsvBtn:not(:disabled):hover {
+    transform: scale(1.05);
+    transition: transform 0.2s;
+}
+
+/* Annotated frame indicator */
+#frameDisplay[data-annotated="true"] {
+    box-shadow: 0 0 0 3px #28a745;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .navigation-controls .btn {
+        font-size: 0.875rem;
+        padding: 0.375rem 0.75rem;
+    }
+    
+    .upload-zone {
+        padding: 20px;
+    }
+}
+
+/* Alert positioning */
+.alert.position-fixed {
+    min-width: 300px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* Frame slider styling */
+.form-range::-webkit-slider-thumb {
+    background: #0d6efd;
+}
+
+.form-range::-moz-range-thumb {
+    background: #0d6efd;
+}
+
+.form-range::-webkit-slider-runnable-track {
+    background: linear-gradient(to right, #0d6efd 0%, #0d6efd var(--value), #dee2e6 var(--value), #dee2e6 100%);
+}
+
+/* Smooth transitions */
+* {
+    transition: background-color 0.2s, border-color 0.2s, transform 0.2s;
+}

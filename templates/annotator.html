@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Touch Annotator</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/annotator.css') }}" rel="stylesheet">
+</head>
+<body>
+    <nav class="navbar navbar-dark bg-dark shadow-sm">
+        <div class="container-fluid">
+            <span class="navbar-brand mb-0 h1">
+                <i class="fas fa-edit me-2"></i>
+                Video Touch Annotator
+            </span>
+            <div>
+                <a href="/" class="btn btn-primary btn-sm me-2">
+                    <i class="fas fa-video me-1"></i> Extractor
+                </a>
+                <button class="btn btn-danger btn-sm" id="clearBtn">
+                    <i class="fas fa-times me-1"></i> New Session
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-3">
+        <!-- Upload Section -->
+        <div id="uploadSection" class="row">
+            <div class="col-md-6 offset-md-3">
+                <div class="card shadow">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0"><i class="fas fa-upload me-2"></i>Upload Video</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="upload-zone" id="videoUploadZone">
+                            <i class="fas fa-video fa-4x mb-3 text-muted"></i>
+                            <p class="mb-2">Drop video file here or click to browse</p>
+                            <small class="text-muted">Supported: MP4, AVI, MOV, MKV, WEBM</small>
+                            <input type="file" id="videoInput" accept=".mp4,.avi,.mov,.mkv,.webm" hidden>
+                        </div>
+                        <div id="uploadStatus" class="mt-3"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Annotation Section (Initially Hidden) -->
+        <div id="annotationSection" class="d-none">
+            <div class="row">
+                <!-- Video Display -->
+                <div class="col-lg-8">
+                    <div class="card shadow">
+                        <div class="card-header bg-dark text-white">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <h5 class="mb-0">
+                                    <i class="fas fa-film me-2"></i>Video Frame
+                                </h5>
+                                <div id="frameInfo" class="text-end">
+                                    Frame: <span id="currentFrame">0</span> / <span id="totalFrames">0</span>
+                                    | Time: <span id="currentTime">0.000</span>s
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div id="videoContainer" class="text-center mb-3">
+                                <img id="frameDisplay" class="img-fluid" style="max-height: 500px;">
+                                <div id="loadingIndicator" class="d-none">
+                                    <div class="spinner-border text-primary" role="status">
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Navigation Controls -->
+                            <div class="navigation-controls">
+                                <div class="d-flex align-items-center mb-3">
+                                    <button class="btn btn-primary me-2" id="prevFrameBtn">
+                                        <i class="fas fa-step-backward"></i> Previous
+                                    </button>
+                                    <button class="btn btn-primary me-2" id="nextFrameBtn">
+                                        Next <i class="fas fa-step-forward"></i>
+                                    </button>
+                                    <div class="input-group ms-auto" style="max-width: 200px;">
+                                        <span class="input-group-text">Go to frame:</span>
+                                        <input type="number" class="form-control" id="frameInput" min="0" value="0">
+                                        <button class="btn btn-outline-primary" id="goToFrameBtn">Go</button>
+                                    </div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Frame Slider</label>
+                                    <input type="range" class="form-range" id="frameSlider" min="0" value="0">
+                                </div>
+                            </div>
+
+                            <!-- Annotation Controls -->
+                            <div class="annotation-controls border-top pt-3">
+                                <div class="row align-items-end">
+                                    <div class="col-md-6">
+                                        <label class="form-label">Body Part</label>
+                                        <select class="form-select" id="bodyPartSelect">
+                                            <option value="Right Foot">Right Foot</option>
+                                            <option value="Left Foot">Left Foot</option>
+                                            <option value="Head">Head</option>
+                                            <option value="Chest">Chest</option>
+                                            <option value="Right Knee">Right Knee</option>
+                                            <option value="Left Knee">Left Knee</option>
+                                            <option value="Right Thigh">Right Thigh</option>
+                                            <option value="Left Thigh">Left Thigh</option>
+                                            <option value="Other">Other</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <button class="btn btn-success w-100" id="markTouchBtn">
+                                            <i class="fas fa-check-circle me-2"></i>Mark Touch
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Annotations List -->
+                <div class="col-lg-4">
+                    <div class="card shadow">
+                        <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0">
+                                <i class="fas fa-list me-2"></i>Annotations
+                                <span class="badge bg-light text-dark ms-2" id="annotationCount">0</span>
+                            </h5>
+                            <button class="btn btn-light btn-sm" id="exportCsvBtn" disabled>
+                                <i class="fas fa-download me-1"></i>Export CSV
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <div id="annotationsList" class="annotation-list">
+                                <div class="text-center text-muted py-5">
+                                    <i class="fas fa-clipboard-list fa-3x mb-3"></i>
+                                    <p>No annotations yet</p>
+                                    <small>Navigate to a frame and mark touches</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Keyboard Shortcuts Help -->
+                    <div class="card shadow mt-3">
+                        <div class="card-header bg-info text-white">
+                            <h6 class="mb-0"><i class="fas fa-keyboard me-2"></i>Keyboard Shortcuts</h6>
+                        </div>
+                        <div class="card-body small">
+                            <table class="table table-sm">
+                                <tr><td>←/→</td><td>Previous/Next frame</td></tr>
+                                <tr><td>Space</td><td>Mark touch</td></tr>
+                                <tr><td>1-9</td><td>Quick select body part</td></tr>
+                                <tr><td>Delete</td><td>Remove current annotation</td></tr>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/annotator.js') }}"></script>
+</body>
+</html>
