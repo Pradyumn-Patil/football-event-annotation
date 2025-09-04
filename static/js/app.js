@@ -28,6 +28,7 @@ document.addEventListener('DOMContentLoaded', function() {
     setupKeyboardNavigation();
     setupImageViewer();
     setupVideoPlayer();
+    setupCSVPanel();
 });
 
 async function loadAvailableVideos() {
@@ -86,10 +87,12 @@ function handleVideoSelection(event) {
         displayVideoInfo(selectedVideo);
         displayCSVStatus(selectedVideo);
         checkVideoReady();
+        populateCSVPanel();
     } else {
         hideVideoInfo();
         hideCSVStatus();
         checkVideoReady();
+        populateCSVPanel(); // This will show empty state
     }
 }
 
@@ -454,6 +457,9 @@ function showFrame(index) {
     if (seekFrameInput) {
         seekFrameInput.value = frame.frame_number;
     }
+    
+    // Update CSV panel highlighting
+    updateCSVHighlight();
 }
 
 function scrollThumbnailIntoView(index) {
@@ -940,12 +946,18 @@ async function saveCSVChanges() {
             });
             
             updateChangesCount();
-            showAlert(`Successfully saved ${result.saved_touches} touch annotations to CSV`, 'success');
+            showAlert(result.message || `Successfully saved ${result.edited_touches} edits. Total: ${result.total_touches}`, 'success');
+            
+            // Refresh CSV panel with updated data
+            await populateCSVPanel();
             
             // Re-extract frames to reflect changes
             if (confirm('CSV updated! Re-extract frames to see changes?')) {
                 exitEditMode();
                 await extractFrames();
+            } else {
+                // Just exit edit mode but keep current frames
+                exitEditMode();
             }
         } else {
             const error = await response.json();
@@ -1365,4 +1377,206 @@ function jumpToVideoCenter() {
     }
     
     console.log(`Jumped to center: ${centerTime.toFixed(2)}s`);
+}
+
+// ========== CSV PANEL FUNCTIONS ==========
+
+function setupCSVPanel() {
+    const toggleCsvBtn = document.getElementById('toggleCsvBtn');
+    const navbarCsvToggle = document.getElementById('navbarCsvToggle');
+    
+    if (toggleCsvBtn) {
+        toggleCsvBtn.addEventListener('click', toggleCSVPanel);
+    }
+    
+    if (navbarCsvToggle) {
+        navbarCsvToggle.addEventListener('click', toggleCSVPanel);
+    }
+}
+
+function toggleCSVPanel() {
+    const csvPanel = document.getElementById('csvPanel');
+    const toggleBtn = document.getElementById('toggleCsvBtn');
+    const navbarToggleBtn = document.getElementById('navbarCsvToggle');
+    
+    const isHidden = csvPanel.style.display === 'none';
+    
+    if (isHidden) {
+        // Show panel
+        csvPanel.style.display = 'block';
+        
+        // Update panel toggle button
+        if (toggleBtn) {
+            const toggleIcon = toggleBtn.querySelector('i');
+            toggleIcon.className = 'fas fa-eye-slash';
+            toggleBtn.title = 'Hide CSV panel';
+        }
+        
+        // Update navbar toggle button
+        if (navbarToggleBtn) {
+            navbarToggleBtn.classList.remove('btn-outline-warning');
+            navbarToggleBtn.classList.add('btn-warning');
+            navbarToggleBtn.title = 'Hide CSV panel';
+        }
+    } else {
+        // Hide panel
+        csvPanel.style.display = 'none';
+        
+        // Update panel toggle button
+        if (toggleBtn) {
+            const toggleIcon = toggleBtn.querySelector('i');
+            toggleIcon.className = 'fas fa-eye';
+            toggleBtn.title = 'Show CSV panel';
+        }
+        
+        // Update navbar toggle button
+        if (navbarToggleBtn) {
+            navbarToggleBtn.classList.remove('btn-warning');
+            navbarToggleBtn.classList.add('btn-outline-warning');
+            navbarToggleBtn.title = 'Show CSV panel';
+        }
+    }
+}
+
+async function populateCSVPanel() {
+    const csvEmpty = document.getElementById('csvEmpty');
+    const csvContent = document.getElementById('csvContent');
+    const csvTotalCount = document.getElementById('csvTotalCount');
+    const csvTableBody = document.getElementById('csvTableBody');
+    
+    if (!selectedVideo) {
+        csvEmpty.classList.remove('d-none');
+        csvContent.classList.add('d-none');
+        return;
+    }
+    
+    try {
+        // Load CSV data if not already loaded
+        if (originalCSVData.length === 0) {
+            await loadCSVData();
+        }
+        
+        if (originalCSVData.length === 0) {
+            csvEmpty.classList.remove('d-none');
+            csvContent.classList.add('d-none');
+            return;
+        }
+        
+        // Show CSV content
+        csvEmpty.classList.add('d-none');
+        csvContent.classList.remove('d-none');
+        
+        // Update total count
+        csvTotalCount.textContent = originalCSVData.length;
+        
+        // Clear existing rows
+        csvTableBody.innerHTML = '';
+        
+        // Sort CSV data by frame number
+        const sortedData = [...originalCSVData].sort((a, b) => 
+            (a['Frame Number'] || 0) - (b['Frame Number'] || 0)
+        );
+        
+        // Populate table rows
+        sortedData.forEach((touch, index) => {
+            const row = document.createElement('tr');
+            row.className = 'csv-row';
+            row.dataset.frameNumber = touch['Frame Number'];
+            row.dataset.index = index;
+            
+            const frameNumber = touch['Frame Number'] || '-';
+            const timeSeconds = touch['Time (seconds)'];
+            const formattedTime = timeSeconds ? formatTime(timeSeconds) : '-';
+            const bodyPart = touch['Body Part'] || '-';
+            
+            row.innerHTML = `
+                <td class="frame-cell" title="Frame ${frameNumber}">
+                    <small>${frameNumber}</small>
+                </td>
+                <td class="time-cell" title="${formattedTime}">
+                    <small>${formattedTime}</small>
+                </td>
+                <td class="bodypart-cell" title="${bodyPart}">
+                    <small>${bodyPart}</small>
+                </td>
+            `;
+            
+            // Add click handler to jump to frame
+            row.addEventListener('click', () => jumpToCSVFrame(touch['Frame Number']));
+            
+            csvTableBody.appendChild(row);
+        });
+        
+        console.log(`CSV panel populated with ${sortedData.length} annotations`);
+        
+    } catch (error) {
+        console.error('Error populating CSV panel:', error);
+        csvEmpty.classList.remove('d-none');
+        csvContent.classList.add('d-none');
+    }
+}
+
+function jumpToCSVFrame(frameNumber) {
+    if (!extractedFrames || extractedFrames.length === 0) {
+        showAlert('No frames extracted yet', 'warning');
+        return;
+    }
+    
+    // Find the frame index in extracted frames
+    const frameIndex = extractedFrames.findIndex(frame => 
+        frame.frame_number === frameNumber
+    );
+    
+    if (frameIndex !== -1) {
+        // Jump to the frame
+        showFrame(frameIndex);
+        
+        // Sync video if available
+        if (videoPlayer && selectedVideo) {
+            syncVideoToFrame();
+        }
+        
+        console.log(`Jumped to frame ${frameNumber} from CSV panel`);
+    } else {
+        showAlert(`Frame ${frameNumber} not found in extracted frames`, 'warning');
+    }
+}
+
+function updateCSVHighlight() {
+    if (!extractedFrames || currentFrameIndex < 0) return;
+    
+    const currentFrame = extractedFrames[currentFrameIndex];
+    const currentFrameNumber = currentFrame.frame_number;
+    
+    // Remove previous highlighting
+    document.querySelectorAll('.csv-row').forEach(row => {
+        row.classList.remove('table-primary', 'current-csv-row');
+    });
+    
+    // Highlight current frame row
+    const currentRow = document.querySelector(`[data-frame-number="${currentFrameNumber}"]`);
+    if (currentRow) {
+        currentRow.classList.add('table-primary', 'current-csv-row');
+        
+        // Scroll to current row
+        currentRow.scrollIntoView({
+            behavior: 'smooth',
+            block: 'center'
+        });
+        
+        // Update current index display
+        const csvCurrentIndex = document.getElementById('csvCurrentIndex');
+        const rowIndex = parseInt(currentRow.dataset.index) + 1;
+        csvCurrentIndex.textContent = `Current: #${rowIndex}`;
+    } else {
+        // Frame not in CSV (not a touch frame)
+        const csvCurrentIndex = document.getElementById('csvCurrentIndex');
+        csvCurrentIndex.textContent = 'Not in CSV';
+    }
+}
+
+function formatTime(seconds) {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}:${remainingSeconds.toFixed(3).padStart(6, '0')}`;
 }

@@ -700,24 +700,58 @@ def save_csv_changes():
         if os.path.exists(csv_path) and not os.path.exists(backup_path):
             shutil.copy2(csv_path, backup_path)
         
-        # Create DataFrame from touch data
-        df = pd.DataFrame(touch_data)
+        # Load original CSV to preserve existing annotations
+        original_df = pd.DataFrame()
+        if os.path.exists(csv_path):
+            original_df = pd.read_csv(csv_path)
+        
+        # Convert touch_data to DataFrame for easier manipulation
+        edited_df = pd.DataFrame(touch_data)
+        
+        if not edited_df.empty:
+            # Get list of frame numbers that were edited
+            edited_frame_numbers = set(edited_df['Frame Number'].tolist())
+            
+            # Keep original annotations that weren't edited
+            if not original_df.empty:
+                unchanged_df = original_df[~original_df['Frame Number'].isin(edited_frame_numbers)]
+            else:
+                unchanged_df = pd.DataFrame()
+            
+            # Combine unchanged original data with new edited data
+            if unchanged_df.empty:
+                combined_df = edited_df
+            elif edited_df.empty:
+                combined_df = unchanged_df
+            else:
+                combined_df = pd.concat([unchanged_df, edited_df], ignore_index=True)
+        else:
+            # If no touch data provided, keep only original data
+            combined_df = original_df
         
         # Ensure proper column order
         column_order = ['Frame Number', 'Time (seconds)', 'Body Part', 'Timestamp']
-        df = df.reindex(columns=column_order)
-        
-        # Sort by frame number
-        df = df.sort_values('Frame Number')
-        
-        # Save to CSV
-        df.to_csv(csv_path, index=False)
+        if not combined_df.empty:
+            combined_df = combined_df.reindex(columns=column_order)
+            
+            # Sort by frame number
+            combined_df = combined_df.sort_values('Frame Number')
+            
+            # Save to CSV
+            combined_df.to_csv(csv_path, index=False)
+            saved_count = len(combined_df)
+        else:
+            # If no data at all, create empty CSV with headers
+            empty_df = pd.DataFrame(columns=column_order)
+            empty_df.to_csv(csv_path, index=False)
+            saved_count = 0
         
         return jsonify({
             'success': True,
-            'saved_touches': len(touch_data),
+            'edited_touches': len(touch_data),
+            'total_touches': saved_count,
             'backup_created': backup_path,
-            'message': f'Successfully saved {len(touch_data)} touch annotations'
+            'message': f'Successfully saved {len(touch_data)} edits. Total annotations: {saved_count}'
         })
         
     except Exception as e:

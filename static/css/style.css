@@ -661,3 +661,163 @@ body {
         height: 150px;
     }
 }
+
+/* CSV Panel Styles */
+.csv-table-container {
+    max-height: 400px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 0.375rem;
+}
+
+#csvTable {
+    margin-bottom: 0;
+    font-size: 0.75rem;
+}
+
+#csvTable thead th {
+    font-size: 0.7rem;
+    padding: 0.5rem 0.25rem;
+    border: none;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+#csvTable tbody td {
+    padding: 0.25rem;
+    border: none;
+    border-bottom: 1px solid rgba(0,0,0,0.05);
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.csv-row:hover {
+    background-color: rgba(0, 123, 255, 0.1) !important;
+}
+
+.csv-row.current-csv-row {
+    background-color: rgba(0, 123, 255, 0.2) !important;
+    border-left: 3px solid var(--primary-color);
+    font-weight: 600;
+}
+
+.frame-cell, .time-cell, .bodypart-cell {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.frame-cell {
+    text-align: center;
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
+.time-cell {
+    font-family: 'Courier New', monospace;
+    color: #6c757d;
+}
+
+.bodypart-cell {
+    color: var(--dark-color);
+}
+
+/* CSV panel responsiveness */
+@media (max-width: 992px) {
+    #csvPanel {
+        order: -1; /* Show CSV panel above other panels on smaller screens */
+    }
+    
+    .csv-table-container {
+        max-height: 300px;
+    }
+    
+    #csvTable {
+        font-size: 0.7rem;
+    }
+}
+
+@media (max-width: 768px) {
+    #csvPanel {
+        margin-bottom: 1rem;
+    }
+    
+    .csv-table-container {
+        max-height: 250px;
+    }
+    
+    #csvTable thead th {
+        padding: 0.25rem;
+        font-size: 0.65rem;
+    }
+    
+    #csvTable tbody td {
+        padding: 0.2rem;
+    }
+    
+    .csv-empty i {
+        font-size: 2rem !important;
+    }
+}
+
+/* CSV panel toggle animation */
+#csvPanel {
+    transition: all 0.3s ease;
+}
+
+#toggleCsvBtn i {
+    transition: transform 0.2s ease;
+}
+
+#toggleCsvBtn:hover i {
+    transform: scale(1.1);
+}
+
+/* Scrollbar styling for CSV table */
+.csv-table-container::-webkit-scrollbar {
+    width: 6px;
+}
+
+.csv-table-container::-webkit-scrollbar-track {
+    background: var(--light-bg);
+}
+
+.csv-table-container::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 3px;
+}
+
+.csv-table-container::-webkit-scrollbar-thumb:hover {
+    background: #888;
+}
+
+/* Navbar CSV Toggle Button */
+#navbarCsvToggle {
+    transition: all 0.3s ease;
+}
+
+#navbarCsvToggle.btn-outline-warning {
+    background: rgba(255, 193, 7, 0.1);
+    border-color: #ffc107;
+    color: #856404;
+}
+
+#navbarCsvToggle.btn-outline-warning:hover {
+    background-color: #ffc107;
+    border-color: #ffc107;
+    color: #000;
+}
+
+#navbarCsvToggle.btn-warning:hover {
+    background-color: #e0a800;
+    border-color: #d39e00;
+}
+
+#navbarCsvToggle i {
+    transition: transform 0.2s ease;
+}
+
+#navbarCsvToggle:hover i {
+    transform: scale(1.1);
+}
