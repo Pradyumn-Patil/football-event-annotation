@@ -14,6 +14,12 @@ let originalCSVData = [];
 let pendingChanges = [];
 let editingTouchData = new Map(); // Map of frame_number -> touch_data
 
+// Video player state
+let videoPlayer = null;
+let currentVideoFilename = null;
+let videoSyncEnabled = true;
+let loopIntervalId = null;
+
 document.addEventListener('DOMContentLoaded', function() {
     loadAvailableVideos();
     setupVideoSelection();
@@ -21,6 +27,7 @@ document.addEventListener('DOMContentLoaded', function() {
     setupFilters();
     setupKeyboardNavigation();
     setupImageViewer();
+    setupVideoPlayer();
 });
 
 async function loadAvailableVideos() {
@@ -361,6 +368,9 @@ function initializeImageViewer() {
     
     // Show first frame
     showFrame(0);
+    
+    // Show video player section
+    showVideoPlayer();
 }
 
 function createThumbnailStrip() {
@@ -434,6 +444,15 @@ function showFrame(index) {
     // Update edit buttons if in edit mode
     if (editMode) {
         updateEditButtons();
+    }
+    
+    // Sync video to current frame
+    syncVideoToFrame();
+    
+    // Update seek frame input
+    const seekFrameInput = document.getElementById('seekFrameInput');
+    if (seekFrameInput) {
+        seekFrameInput.value = frame.frame_number;
     }
 }
 
@@ -628,6 +647,9 @@ async function clearAll() {
             document.querySelector('.viewer-empty').classList.remove('d-none');
             document.querySelector('.viewer-content').classList.add('d-none');
             document.getElementById('thumbnailContainer').innerHTML = '';
+            
+            // Hide video player
+            hideVideoPlayer();
             
             // Reset UI controls
             document.getElementById('frameCount').textContent = '0';
@@ -946,4 +968,401 @@ function discardChanges() {
     if (confirm(`Discard ${pendingChanges.length} unsaved changes?`)) {
         exitEditMode();
     }
+}
+
+// ========== VIDEO PLAYER FUNCTIONS ==========
+
+function setupVideoPlayer() {
+    videoPlayer = document.getElementById('videoPlayer');
+    const toggleVideoBtn = document.getElementById('toggleVideoBtn');
+    const playAroundBtn = document.getElementById('playAroundBtn');
+    const playbackSpeed = document.getElementById('playbackSpeed');
+    const seekBtn = document.getElementById('seekBtn');
+    const seekTimeInput = document.getElementById('seekTimeInput');
+    const seekFrameBtn = document.getElementById('seekFrameBtn');
+    const seekFrameInput = document.getElementById('seekFrameInput');
+    const prevTouchVideoBtn = document.getElementById('prevTouchVideoBtn');
+    const nextTouchVideoBtn = document.getElementById('nextTouchVideoBtn');
+    const syncVideoBtn = document.getElementById('syncVideoBtn');
+    const centerVideoBtn = document.getElementById('centerVideoBtn');
+    const loopMode = document.getElementById('loopMode');
+    
+    if (!videoPlayer) return;
+    
+    // Setup event listeners
+    toggleVideoBtn?.addEventListener('click', toggleVideoVisibility);
+    playAroundBtn?.addEventListener('click', playAroundCurrentFrame);
+    playbackSpeed?.addEventListener('change', changePlaybackSpeed);
+    seekBtn?.addEventListener('click', seekToTime);
+    seekTimeInput?.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') seekToTime();
+    });
+    seekFrameBtn?.addEventListener('click', seekToFrame);
+    seekFrameInput?.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') seekToFrame();
+    });
+    prevTouchVideoBtn?.addEventListener('click', jumpToPreviousTouch);
+    nextTouchVideoBtn?.addEventListener('click', jumpToNextTouch);
+    syncVideoBtn?.addEventListener('click', syncVideoToCurrentFrame);
+    centerVideoBtn?.addEventListener('click', jumpToVideoCenter);
+    loopMode?.addEventListener('change', toggleLoopMode);
+    
+    // Video element events
+    videoPlayer.addEventListener('timeupdate', updateVideoTime);
+    videoPlayer.addEventListener('loadedmetadata', onVideoLoaded);
+    videoPlayer.addEventListener('error', onVideoError);
+}
+
+function showVideoPlayer() {
+    if (!selectedVideo) return;
+    
+    const videoPlayerSection = document.getElementById('videoPlayerSection');
+    const videoContainer = document.getElementById('videoContainer');
+    
+    if (videoPlayerSection && extractedFrames.length > 0) {
+        videoPlayerSection.classList.remove('d-none');
+        
+        // Load video if not already loaded or different video
+        if (currentVideoFilename !== selectedVideo.filename) {
+            loadVideoSource();
+        }
+    }
+}
+
+function hideVideoPlayer() {
+    const videoPlayerSection = document.getElementById('videoPlayerSection');
+    const videoContainer = document.getElementById('videoContainer');
+    
+    if (videoPlayerSection) {
+        videoPlayerSection.classList.add('d-none');
+        videoContainer?.classList.add('d-none');
+    }
+    
+    clearVideoLoop();
+}
+
+function loadVideoSource() {
+    if (!selectedVideo || !videoPlayer) return;
+    
+    const videoUrl = `/api/video/${selectedVideo.filename}`;
+    videoPlayer.src = videoUrl;
+    currentVideoFilename = selectedVideo.filename;
+    
+    console.log('Loading video:', videoUrl);
+}
+
+function toggleVideoVisibility() {
+    const videoContainer = document.getElementById('videoContainer');
+    const toggleBtn = document.getElementById('toggleVideoBtn');
+    
+    if (videoContainer.classList.contains('d-none')) {
+        videoContainer.classList.remove('d-none');
+        toggleBtn.innerHTML = '<i class="fas fa-eye-slash"></i>';
+        toggleBtn.title = 'Hide Video';
+        
+        // Load video source if needed
+        if (currentVideoFilename !== selectedVideo.filename) {
+            loadVideoSource();
+        }
+    } else {
+        videoContainer.classList.add('d-none');
+        toggleBtn.innerHTML = '<i class="fas fa-eye"></i>';
+        toggleBtn.title = 'Show Video';
+        clearVideoLoop();
+    }
+}
+
+function syncVideoToFrame() {
+    if (!videoPlayer || !videoSyncEnabled || !selectedVideo || currentFrameIndex < 0) return;
+    
+    const currentFrame = extractedFrames[currentFrameIndex];
+    if (!currentFrame) return;
+    
+    const timeInSeconds = currentFrame.frame_number / selectedVideo.video_info.fps;
+    
+    // Only seek if time difference is significant (> 0.5 seconds)
+    if (Math.abs(videoPlayer.currentTime - timeInSeconds) > 0.5) {
+        videoPlayer.currentTime = timeInSeconds;
+        
+        // Update seek input
+        const seekTimeInput = document.getElementById('seekTimeInput');
+        if (seekTimeInput) {
+            seekTimeInput.value = timeInSeconds.toFixed(1);
+        }
+    }
+}
+
+function playAroundCurrentFrame() {
+    if (!videoPlayer || !selectedVideo || currentFrameIndex < 0) return;
+    
+    const currentFrame = extractedFrames[currentFrameIndex];
+    if (!currentFrame) return;
+    
+    const frameTime = currentFrame.frame_number / selectedVideo.video_info.fps;
+    const startTime = Math.max(0, frameTime - 2); // 2 seconds before
+    const endTime = Math.min(selectedVideo.video_info.duration, frameTime + 2); // 2 seconds after
+    
+    // Show video if hidden
+    const videoContainer = document.getElementById('videoContainer');
+    if (videoContainer.classList.contains('d-none')) {
+        toggleVideoVisibility();
+    }
+    
+    // Set video time and play
+    videoPlayer.currentTime = startTime;
+    
+    // Wait for seek to complete, then play
+    videoPlayer.addEventListener('seeked', function onSeeked() {
+        videoPlayer.removeEventListener('seeked', onSeeked);
+        videoPlayer.play();
+        
+        // Set up loop if enabled
+        const loopMode = document.getElementById('loopMode');
+        if (loopMode?.checked) {
+            setupVideoLoop(startTime, endTime);
+        }
+    });
+}
+
+function setupVideoLoop(startTime, endTime) {
+    clearVideoLoop();
+    
+    loopIntervalId = setInterval(() => {
+        if (videoPlayer.currentTime >= endTime) {
+            videoPlayer.currentTime = startTime;
+        }
+    }, 100);
+}
+
+function clearVideoLoop() {
+    if (loopIntervalId) {
+        clearInterval(loopIntervalId);
+        loopIntervalId = null;
+    }
+}
+
+function toggleLoopMode() {
+    const loopMode = document.getElementById('loopMode');
+    if (!loopMode?.checked) {
+        clearVideoLoop();
+    }
+}
+
+function changePlaybackSpeed() {
+    const playbackSpeed = document.getElementById('playbackSpeed');
+    if (videoPlayer && playbackSpeed) {
+        videoPlayer.playbackRate = parseFloat(playbackSpeed.value);
+    }
+}
+
+function seekToTime() {
+    const seekTimeInput = document.getElementById('seekTimeInput');
+    if (videoPlayer && seekTimeInput) {
+        const time = parseFloat(seekTimeInput.value);
+        if (!isNaN(time) && time >= 0) {
+            videoPlayer.currentTime = Math.min(time, videoPlayer.duration || time);
+        }
+    }
+}
+
+function updateVideoTime() {
+    if (!videoPlayer) return;
+    
+    const currentVideoTime = document.getElementById('currentVideoTime');
+    const currentVideoFrame = document.getElementById('currentVideoFrame');
+    
+    if (currentVideoTime) {
+        const minutes = Math.floor(videoPlayer.currentTime / 60);
+        const seconds = (videoPlayer.currentTime % 60).toFixed(1);
+        currentVideoTime.textContent = `${minutes}:${seconds.padStart(4, '0')}`;
+    }
+    
+    if (currentVideoFrame && selectedVideo) {
+        const fps = selectedVideo.video_info.fps;
+        const currentFrame = Math.round(videoPlayer.currentTime * fps);
+        currentVideoFrame.textContent = `Frame: ${currentFrame}`;
+        
+        // Update seek frame input if it's empty
+        const seekFrameInput = document.getElementById('seekFrameInput');
+        if (seekFrameInput && !seekFrameInput.value) {
+            seekFrameInput.placeholder = `${currentFrame}`;
+        }
+    }
+}
+
+function onVideoLoaded() {
+    console.log('Video loaded, duration:', videoPlayer.duration);
+    const seekTimeInput = document.getElementById('seekTimeInput');
+    const seekFrameInput = document.getElementById('seekFrameInput');
+    
+    if (seekTimeInput) {
+        seekTimeInput.max = videoPlayer.duration;
+    }
+    
+    if (seekFrameInput && selectedVideo) {
+        const fps = selectedVideo.video_info.fps;
+        const maxFrame = Math.round(videoPlayer.duration * fps);
+        seekFrameInput.max = maxFrame;
+    }
+}
+
+function onVideoError(e) {
+    console.error('Video error:', e);
+    showAlert('Error loading video. Please check if the video file exists.', 'danger');
+}
+
+// ========== FRAME JUMPING FUNCTIONS ==========
+
+function seekToFrame() {
+    const seekFrameInput = document.getElementById('seekFrameInput');
+    if (!videoPlayer || !seekFrameInput || !selectedVideo) return;
+    
+    const frameNumber = parseInt(seekFrameInput.value);
+    if (isNaN(frameNumber) || frameNumber < 1) {
+        showAlert('Please enter a valid frame number', 'warning');
+        return;
+    }
+    
+    // Convert frame number to timestamp
+    const fps = selectedVideo.video_info.fps;
+    const timeInSeconds = frameNumber / fps;
+    
+    if (timeInSeconds > videoPlayer.duration) {
+        showAlert(`Frame ${frameNumber} is beyond video duration`, 'warning');
+        return;
+    }
+    
+    // Seek video to frame timestamp
+    videoPlayer.currentTime = timeInSeconds;
+    
+    // Update the frame viewer to match if possible
+    updateFrameViewerFromVideo(frameNumber);
+    
+    console.log(`Jumped to frame ${frameNumber} at ${timeInSeconds.toFixed(2)}s`);
+}
+
+function updateFrameViewerFromVideo(targetFrameNumber) {
+    if (!extractedFrames || extractedFrames.length === 0) return;
+    
+    // Find the closest extracted frame to the target frame number
+    let closestIndex = 0;
+    let closestDistance = Math.abs(extractedFrames[0].frame_number - targetFrameNumber);
+    
+    for (let i = 1; i < extractedFrames.length; i++) {
+        const distance = Math.abs(extractedFrames[i].frame_number - targetFrameNumber);
+        if (distance < closestDistance) {
+            closestDistance = distance;
+            closestIndex = i;
+        }
+    }
+    
+    // Update frame viewer if we found a reasonably close frame
+    if (closestDistance <= 30) { // Within 30 frames (about 1 second at 30fps)
+        showFrame(closestIndex);
+    }
+}
+
+function jumpToPreviousTouch() {
+    if (!touchFrameIndices || touchFrameIndices.length === 0) {
+        showAlert('No touch frames available', 'warning');
+        return;
+    }
+    
+    // Find current touch frame index or closest one
+    let targetIndex = 0;
+    if (currentFrameIndex >= 0) {
+        const currentTouchIndex = touchFrameIndices.indexOf(currentFrameIndex);
+        if (currentTouchIndex > 0) {
+            targetIndex = currentTouchIndex - 1;
+        } else {
+            // Find previous touch frame
+            for (let i = touchFrameIndices.length - 1; i >= 0; i--) {
+                if (touchFrameIndices[i] < currentFrameIndex) {
+                    targetIndex = i;
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Jump to the touch frame
+    const frameIndex = touchFrameIndices[targetIndex];
+    showFrame(frameIndex);
+    
+    // Update seek frame input
+    const frame = extractedFrames[frameIndex];
+    if (frame) {
+        const seekFrameInput = document.getElementById('seekFrameInput');
+        if (seekFrameInput) {
+            seekFrameInput.value = frame.frame_number;
+        }
+    }
+}
+
+function jumpToNextTouch() {
+    if (!touchFrameIndices || touchFrameIndices.length === 0) {
+        showAlert('No touch frames available', 'warning');
+        return;
+    }
+    
+    // Find next touch frame index
+    let targetIndex = touchFrameIndices.length - 1; // Default to last
+    if (currentFrameIndex >= 0) {
+        const currentTouchIndex = touchFrameIndices.indexOf(currentFrameIndex);
+        if (currentTouchIndex >= 0 && currentTouchIndex < touchFrameIndices.length - 1) {
+            targetIndex = currentTouchIndex + 1;
+        } else {
+            // Find next touch frame
+            for (let i = 0; i < touchFrameIndices.length; i++) {
+                if (touchFrameIndices[i] > currentFrameIndex) {
+                    targetIndex = i;
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Jump to the touch frame
+    const frameIndex = touchFrameIndices[targetIndex];
+    showFrame(frameIndex);
+    
+    // Update seek frame input
+    const frame = extractedFrames[frameIndex];
+    if (frame) {
+        const seekFrameInput = document.getElementById('seekFrameInput');
+        if (seekFrameInput) {
+            seekFrameInput.value = frame.frame_number;
+        }
+    }
+}
+
+function syncVideoToCurrentFrame() {
+    if (currentFrameIndex >= 0 && currentFrameIndex < extractedFrames.length) {
+        syncVideoToFrame();
+        showAlert('Video synced to current frame', 'success');
+    } else {
+        showAlert('No frame selected to sync to', 'warning');
+    }
+}
+
+function jumpToVideoCenter() {
+    if (!videoPlayer || !selectedVideo) return;
+    
+    const centerTime = selectedVideo.video_info.duration / 2;
+    videoPlayer.currentTime = centerTime;
+    
+    // Update seek inputs
+    const seekTimeInput = document.getElementById('seekTimeInput');
+    const seekFrameInput = document.getElementById('seekFrameInput');
+    
+    if (seekTimeInput) {
+        seekTimeInput.value = centerTime.toFixed(1);
+    }
+    
+    if (seekFrameInput) {
+        const centerFrame = Math.round(centerTime * selectedVideo.video_info.fps);
+        seekFrameInput.value = centerFrame;
+    }
+    
+    console.log(`Jumped to center: ${centerTime.toFixed(2)}s`);
 }

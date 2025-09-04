@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, send_file, url_for, session
+from flask import Flask, render_template, request, jsonify, send_file, url_for, session, Response
 import os
 import cv2
 import pandas as pd
@@ -11,6 +11,7 @@ from io import BytesIO, StringIO
 from PIL import Image
 import uuid
 import time
+import re
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here-change-in-production'
@@ -688,9 +689,15 @@ def save_csv_changes():
         csv_filename = f"{base_name}.csv"
         csv_path = os.path.join(csv_folder, csv_filename)
         
-        # Create backup of original CSV
-        backup_path = f"{csv_path}.backup.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        if os.path.exists(csv_path):
+        # Create backup folder and backup original CSV only once (before first edit)
+        backup_folder = os.path.join(os.path.dirname(csv_folder), 'backup_csv')
+        os.makedirs(backup_folder, exist_ok=True)
+        
+        backup_filename = f"{base_name}_original.csv"
+        backup_path = os.path.join(backup_folder, backup_filename)
+        
+        # Only create backup if it doesn't already exist (first edit only)
+        if os.path.exists(csv_path) and not os.path.exists(backup_path):
             shutil.copy2(csv_path, backup_path)
         
         # Create DataFrame from touch data
@@ -977,6 +984,79 @@ def clear_session():
         session.clear()
         
         return jsonify({'success': True})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/video/<filename>')
+def stream_video(filename):
+    """Stream video file from data folder with range request support"""
+    try:
+        video_path = os.path.join(app.config['DATA_FOLDER'], filename)
+        
+        if not os.path.exists(video_path):
+            return jsonify({'error': 'Video file not found'}), 404
+        
+        # Check if it's an allowed video file
+        if not allowed_file(filename, ALLOWED_VIDEO_EXTENSIONS):
+            return jsonify({'error': 'Invalid video format'}), 400
+        
+        # Get range header before creating generator
+        range_header = request.headers.get('Range', None)
+        file_size = os.path.getsize(video_path)
+        
+        # Parse range header
+        byte_start = 0
+        byte_end = file_size - 1
+        
+        if range_header:
+            match = re.search(r'bytes=(\d+)-(\d*)', range_header)
+            if match:
+                byte_start = int(match.group(1))
+                if match.group(2):
+                    byte_end = int(match.group(2))
+        
+        content_length = byte_end - byte_start + 1
+        
+        def generate():
+            with open(video_path, 'rb') as f:
+                f.seek(byte_start)
+                remaining = content_length
+                while remaining:
+                    read_size = min(remaining, 8192)  # Read in 8KB chunks
+                    data = f.read(read_size)
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+        
+        # Determine MIME type based on file extension
+        file_ext = filename.lower().split('.')[-1]
+        mime_types = {
+            'mp4': 'video/mp4',
+            'avi': 'video/x-msvideo',
+            'mov': 'video/quicktime',
+            'mkv': 'video/x-matroska',
+            'webm': 'video/webm'
+        }
+        mimetype = mime_types.get(file_ext, 'video/mp4')
+        
+        response = Response(generate(), 
+                          206 if range_header else 200,
+                          mimetype=mimetype)
+        
+        if range_header:
+            response.headers.add('Content-Range', 
+                               f'bytes {byte_start}-{byte_end}/{file_size}')
+            response.headers.add('Accept-Ranges', 'bytes')
+            response.headers.add('Content-Length', str(content_length))
+            response.status_code = 206
+        else:
+            response.headers.add('Content-Length', str(file_size))
+        
+        response.headers.add('Cache-Control', 'no-cache')
+        
+        return response
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500

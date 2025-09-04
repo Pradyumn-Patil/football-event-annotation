@@ -131,6 +131,7 @@ dmypy.json
 # Application-specific ignores
 extracted_frames/
 reviewed_extracted_frames/
+backup_csv/
 data/*.mp4
 data/*.avi
 data/*.mov
