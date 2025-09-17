@@ -84,23 +84,26 @@ def extract_frames(video_path, csv_path, video_filename):
             time_sec = row['Time (seconds)']
             body_part = row['Body Part']
             timestamp = row['Timestamp']
-            
+            # Handle Event Type with backward compatibility
+            event_type = row.get('Event Type', 'ball_touch')
+
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num - 1)
             ret, frame = cap.read()
-            
+
             if ret:
                 frame_filename = f"frame_{frame_num:06d}.jpg"
                 frame_path = os.path.join(app.config['FRAMES_FOLDER'], frame_filename)
-                
+
                 cv2.imwrite(frame_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
-                
+
                 _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
                 thumbnail_base64 = base64.b64encode(buffer).decode('utf-8')
-                
+
                 extracted_frames.append({
                     'frame_number': frame_num,
                     'time_seconds': float(time_sec),
                     'body_part': body_part,
+                    'event_type': event_type,
                     'timestamp': timestamp,
                     'filename': frame_filename,
                     'thumbnail': f"data:image/jpeg;base64,{thumbnail_base64}",
@@ -177,7 +180,8 @@ def extract_timeline(video_path, csv_path, video_filename, extraction_fps=5):
             touch_data[frame_num] = {
                 'body_part': row['Body Part'],
                 'time_seconds': float(row['Time (seconds)']),
-                'timestamp': row['Timestamp']
+                'timestamp': row['Timestamp'],
+                'event_type': row.get('Event Type', 'ball_touch')
             }
         
         # Clean previous frames before extracting new ones
@@ -219,6 +223,7 @@ def extract_timeline(video_path, csv_path, video_filename, extraction_fps=5):
                     'thumbnail': f"data:image/jpeg;base64,{thumbnail_base64}",
                     'is_touch': is_touch,
                     'body_part': touch_data.get(frame_number, {}).get('body_part', '') if is_touch else '',
+                    'event_type': touch_data.get(frame_number, {}).get('event_type', 'ball_touch') if is_touch else '',
                     'timestamp': touch_data.get(frame_number, {}).get('timestamp', '') if is_touch else ''
                 }
                 
@@ -577,30 +582,66 @@ def cleanup_frames():
 
 @app.route('/api/load_csv', methods=['POST'])
 def load_csv():
-    """Load CSV data for editing"""
+    """Load CSV data for editing with support for both old and new formats"""
     try:
         data = request.json
         video_filename = data.get('video_filename')
-        
+
         if not video_filename:
             return jsonify({'error': 'Missing video filename'}), 400
-        
+
         csv_folder = app.config['CSV_FOLDER']
         base_name = os.path.splitext(video_filename)[0]
         csv_filename = f"{base_name}.csv"
         csv_path = os.path.join(csv_folder, csv_filename)
-        
+
         if not os.path.exists(csv_path):
             return jsonify({'error': f'CSV file not found: {csv_filename}'}), 404
-        
+
         df = pd.read_csv(csv_path)
+
+        # Check which format the CSV is using
+        is_new_format = 'Touch_Event' in df.columns and 'Foot_Plant_Event' in df.columns
+
+        # Convert data to consistent format for frontend
         csv_data = df.to_dict('records')
-        
+
+        # If old format, add new format columns with converted values
+        if not is_new_format:
+            for row in csv_data:
+                # Convert old format to new format values
+                body_part = row.get('Body Part', '')
+                event_type = row.get('Event Type', 'ball_touch')
+
+                # Set Touch_Event (0=no touch, 1=right foot, 2=left foot)
+                if event_type == 'ball_touch':
+                    if body_part == 'Right Foot':
+                        row['Touch_Event'] = 1
+                    elif body_part == 'Left Foot':
+                        row['Touch_Event'] = 2
+                    else:
+                        row['Touch_Event'] = 0
+                else:
+                    row['Touch_Event'] = 0
+
+                # Set Foot_Plant_Event (0=no foot, 1=right foot, 2=left foot)
+                if event_type in ['foot_touchdown', 'foot_liftoff']:
+                    if body_part == 'Right Foot':
+                        row['Foot_Plant_Event'] = 1
+                    elif body_part == 'Left Foot':
+                        row['Foot_Plant_Event'] = 2
+                    else:
+                        row['Foot_Plant_Event'] = 0
+                else:
+                    row['Foot_Plant_Event'] = 0
+
         return jsonify({
             'success': True,
             'csv_data': csv_data,
             'csv_filename': csv_filename,
-            'total_touches': len(csv_data)
+            'total_touches': len(csv_data),
+            'format': 'new' if is_new_format else 'old',
+            'has_new_columns': is_new_format
         })
         
     except Exception as e:
@@ -641,83 +682,242 @@ def move_touch():
 
 @app.route('/api/add_touch', methods=['POST'])
 def add_touch():
-    """Add a new touch annotation"""
+    """Add a new touch annotation with new format support and save to CSV file"""
     try:
         data = request.json
         video_filename = data.get('video_filename')
         frame_number = data.get('frame_number')
+
+        # Support both old and new format
+        # New format: Touch_Event (0/1/2) and Foot_Plant_Event (0/1/2)
+        touch_event = data.get('touch_event')
+        foot_plant_event = data.get('foot_plant_event')
+
+        # Old format fallback
         body_part = data.get('body_part', 'Right Foot')
-        
+        event_type = data.get('event_type', 'ball_touch')
+
         if not all([video_filename, frame_number]):
             return jsonify({'error': 'Missing required parameters'}), 400
-        
+
         # Calculate time based on video FPS
         data_folder = app.config['DATA_FOLDER']
         video_path = os.path.join(data_folder, video_filename)
-        
+
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
         cap.release()
-        
+
         time_seconds = (frame_number - 1) / fps
         timestamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-        
-        return jsonify({
+
+        # Prepare CSV paths
+        csv_folder = app.config['CSV_FOLDER']
+        base_name = os.path.splitext(video_filename)[0]
+        csv_filename = f"{base_name}.csv"
+        csv_path = os.path.join(csv_folder, csv_filename)
+
+        # Create backup folder and backup original CSV only once (before first edit)
+        backup_folder = os.path.join(os.path.dirname(csv_folder), 'backup_csv')
+        os.makedirs(backup_folder, exist_ok=True)
+
+        backup_filename = f"{base_name}_original.csv"
+        backup_path = os.path.join(backup_folder, backup_filename)
+
+        # Only create backup if it doesn't already exist (first edit only)
+        if os.path.exists(csv_path) and not os.path.exists(backup_path):
+            shutil.copy2(csv_path, backup_path)
+
+        # Load existing CSV data
+        if os.path.exists(csv_path):
+            existing_df = pd.read_csv(csv_path)
+        else:
+            existing_df = pd.DataFrame()
+
+        # Check if annotation already exists for this frame
+        if not existing_df.empty and frame_number in existing_df['Frame Number'].values:
+            return jsonify({'error': f'Annotation already exists for frame {frame_number}'}), 400
+
+        # Create new annotation entry
+        new_annotation = {
+            'Frame Number': frame_number,
+            'Time (seconds)': time_seconds,
+            'Timestamp': timestamp
+        }
+
+        # Determine format and add appropriate columns
+        use_new_format = touch_event is not None or foot_plant_event is not None
+
+        if use_new_format:
+            # New format with Touch_Event and Foot_Plant_Event
+            new_annotation['Touch_Event'] = touch_event if touch_event is not None else 0
+            new_annotation['Foot_Plant_Event'] = foot_plant_event if foot_plant_event is not None else 0
+            # Keep old format for compatibility
+            new_annotation['Body Part'] = body_part
+            new_annotation['Event Type'] = event_type
+        else:
+            # Old format
+            new_annotation['Body Part'] = body_part
+            new_annotation['Event Type'] = event_type
+
+        # Add new annotation to existing data
+        new_df = pd.DataFrame([new_annotation])
+        if existing_df.empty:
+            combined_df = new_df
+        else:
+            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+
+        # Sort by frame number
+        combined_df = combined_df.sort_values('Frame Number')
+
+        # Determine column order
+        if use_new_format and 'Touch_Event' in combined_df.columns:
+            column_order = ['Frame Number', 'Time (seconds)', 'Touch_Event', 'Foot_Plant_Event', 'Timestamp']
+        else:
+            column_order = ['Frame Number', 'Time (seconds)', 'Body Part', 'Event Type', 'Timestamp']
+
+        # Reorder columns, keeping any extra columns
+        all_columns = list(combined_df.columns)
+        extra_columns = [col for col in all_columns if col not in column_order]
+        final_columns = column_order + extra_columns
+        combined_df = combined_df.reindex(columns=[col for col in final_columns if col in combined_df.columns])
+
+        # Save to CSV
+        combined_df.to_csv(csv_path, index=False)
+
+        # Prepare response
+        response_data = {
             'success': True,
             'frame_number': frame_number,
             'time_seconds': time_seconds,
+            'timestamp': timestamp,
             'body_part': body_part,
-            'timestamp': timestamp
+            'event_type': event_type,
+            'total_annotations': len(combined_df),
+            'message': f'Annotation added for frame {frame_number}'
+        }
+
+        # Include new format if provided
+        if touch_event is not None:
+            response_data['touch_event'] = touch_event
+        if foot_plant_event is not None:
+            response_data['foot_plant_event'] = foot_plant_event
+
+        return jsonify(response_data)
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/delete_touch', methods=['POST'])
+def delete_touch():
+    """Delete a touch annotation from CSV file"""
+    try:
+        data = request.json
+        video_filename = data.get('video_filename')
+        frame_number = data.get('frame_number')
+
+        if not all([video_filename, frame_number]):
+            return jsonify({'error': 'Missing required parameters'}), 400
+
+        # Prepare CSV paths
+        csv_folder = app.config['CSV_FOLDER']
+        base_name = os.path.splitext(video_filename)[0]
+        csv_filename = f"{base_name}.csv"
+        csv_path = os.path.join(csv_folder, csv_filename)
+
+        if not os.path.exists(csv_path):
+            return jsonify({'error': f'CSV file not found: {csv_filename}'}), 404
+
+        # Load existing CSV data
+        existing_df = pd.read_csv(csv_path)
+
+        # Check if annotation exists for this frame
+        if frame_number not in existing_df['Frame Number'].values:
+            return jsonify({'error': f'No annotation found for frame {frame_number}'}), 404
+
+        # Create backup folder and backup original CSV only once (before first edit)
+        backup_folder = os.path.join(os.path.dirname(csv_folder), 'backup_csv')
+        os.makedirs(backup_folder, exist_ok=True)
+
+        backup_filename = f"{base_name}_original.csv"
+        backup_path = os.path.join(backup_folder, backup_filename)
+
+        # Only create backup if it doesn't already exist (first edit only)
+        if not os.path.exists(backup_path):
+            shutil.copy2(csv_path, backup_path)
+
+        # Get the annotation data before deletion for response
+        deleted_annotation = existing_df[existing_df['Frame Number'] == frame_number].iloc[0].to_dict()
+
+        # Remove the annotation
+        updated_df = existing_df[existing_df['Frame Number'] != frame_number]
+
+        # Save updated CSV
+        if updated_df.empty:
+            # If no annotations left, create empty CSV with headers
+            headers = list(existing_df.columns)
+            empty_df = pd.DataFrame(columns=headers)
+            empty_df.to_csv(csv_path, index=False)
+        else:
+            updated_df.to_csv(csv_path, index=False)
+
+        return jsonify({
+            'success': True,
+            'frame_number': frame_number,
+            'deleted_annotation': deleted_annotation,
+            'total_annotations': len(updated_df),
+            'message': f'Annotation deleted for frame {frame_number}'
         })
-        
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/save_csv_changes', methods=['POST'])
 def save_csv_changes():
-    """Save all touch editing changes back to CSV file"""
+    """Save all touch editing changes back to CSV file with new format support"""
     try:
         data = request.json
         video_filename = data.get('video_filename')
         touch_data = data.get('touch_data', [])
-        
+        use_new_format = data.get('use_new_format', True)  # Default to new format
+
         if not video_filename:
             return jsonify({'error': 'Missing video filename'}), 400
-        
+
         csv_folder = app.config['CSV_FOLDER']
         base_name = os.path.splitext(video_filename)[0]
         csv_filename = f"{base_name}.csv"
         csv_path = os.path.join(csv_folder, csv_filename)
-        
+
         # Create backup folder and backup original CSV only once (before first edit)
         backup_folder = os.path.join(os.path.dirname(csv_folder), 'backup_csv')
         os.makedirs(backup_folder, exist_ok=True)
-        
+
         backup_filename = f"{base_name}_original.csv"
         backup_path = os.path.join(backup_folder, backup_filename)
-        
+
         # Only create backup if it doesn't already exist (first edit only)
         if os.path.exists(csv_path) and not os.path.exists(backup_path):
             shutil.copy2(csv_path, backup_path)
-        
+
         # Load original CSV to preserve existing annotations
         original_df = pd.DataFrame()
         if os.path.exists(csv_path):
             original_df = pd.read_csv(csv_path)
-        
+
         # Convert touch_data to DataFrame for easier manipulation
         edited_df = pd.DataFrame(touch_data)
-        
+
         if not edited_df.empty:
             # Get list of frame numbers that were edited
             edited_frame_numbers = set(edited_df['Frame Number'].tolist())
-            
+
             # Keep original annotations that weren't edited
             if not original_df.empty:
                 unchanged_df = original_df[~original_df['Frame Number'].isin(edited_frame_numbers)]
             else:
                 unchanged_df = pd.DataFrame()
-            
+
             # Combine unchanged original data with new edited data
             if unchanged_df.empty:
                 combined_df = edited_df
@@ -728,15 +928,47 @@ def save_csv_changes():
         else:
             # If no touch data provided, keep only original data
             combined_df = original_df
-        
-        # Ensure proper column order
-        column_order = ['Frame Number', 'Time (seconds)', 'Body Part', 'Timestamp']
+
+        # Determine column order based on format
+        if use_new_format:
+            # New format with Touch_Event and Foot_Plant_Event
+            column_order = ['Frame Number', 'Time (seconds)', 'Touch_Event', 'Foot_Plant_Event', 'Timestamp']
+
+            if not combined_df.empty:
+                # Add new columns if they don't exist
+                if 'Touch_Event' not in combined_df.columns:
+                    # Convert from old format if possible
+                    if 'Body Part' in combined_df.columns and 'Event Type' in combined_df.columns:
+                        combined_df['Touch_Event'] = combined_df.apply(
+                            lambda row: 1 if row.get('Body Part') == 'Right Foot' and row.get('Event Type') == 'ball_touch'
+                                      else 2 if row.get('Body Part') == 'Left Foot' and row.get('Event Type') == 'ball_touch'
+                                      else 0, axis=1)
+                        combined_df['Foot_Plant_Event'] = combined_df.apply(
+                            lambda row: 1 if row.get('Body Part') == 'Right Foot' and row.get('Event Type') in ['foot_touchdown', 'foot_liftoff']
+                                      else 2 if row.get('Body Part') == 'Left Foot' and row.get('Event Type') in ['foot_touchdown', 'foot_liftoff']
+                                      else 0, axis=1)
+                    else:
+                        combined_df['Touch_Event'] = 0
+                        combined_df['Foot_Plant_Event'] = 0
+
+                # Keep old columns for reference but not in primary order
+                all_columns = list(combined_df.columns)
+                extra_columns = [col for col in all_columns if col not in column_order]
+                final_columns = column_order + extra_columns
+                combined_df = combined_df.reindex(columns=[col for col in final_columns if col in combined_df.columns])
+        else:
+            # Old format for backward compatibility
+            column_order = ['Frame Number', 'Time (seconds)', 'Body Part', 'Event Type', 'Timestamp']
+            if not combined_df.empty:
+                # Add Event Type column if it doesn't exist (backward compatibility)
+                if 'Event Type' not in combined_df.columns:
+                    combined_df['Event Type'] = 'ball_touch'
+                combined_df = combined_df.reindex(columns=[col for col in column_order if col in combined_df.columns])
+
         if not combined_df.empty:
-            combined_df = combined_df.reindex(columns=column_order)
-            
             # Sort by frame number
             combined_df = combined_df.sort_values('Frame Number')
-            
+
             # Save to CSV
             combined_df.to_csv(csv_path, index=False)
             saved_count = len(combined_df)
@@ -745,13 +977,14 @@ def save_csv_changes():
             empty_df = pd.DataFrame(columns=column_order)
             empty_df.to_csv(csv_path, index=False)
             saved_count = 0
-        
+
         return jsonify({
             'success': True,
             'edited_touches': len(touch_data),
             'total_touches': saved_count,
             'backup_created': backup_path,
-            'message': f'Successfully saved {len(touch_data)} edits. Total annotations: {saved_count}'
+            'format_used': 'new' if use_new_format else 'old',
+            'message': f'Successfully saved {len(touch_data)} annotations. Total: {saved_count}'
         })
         
     except Exception as e:
@@ -780,9 +1013,6 @@ def clear_files():
 
 # ============= ANNOTATION SYSTEM ROUTES =============
 
-@app.route('/annotator')
-def annotator():
-    return render_template('annotator.html')
 
 @app.route('/upload_video', methods=['POST'])
 def upload_video():
@@ -840,40 +1070,88 @@ def upload_video():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/load_data_video', methods=['POST'])
+def load_data_video():
+    try:
+        data = request.json
+        video_filename = data.get('video_filename')
+
+        if not video_filename:
+            return jsonify({'error': 'No video filename provided'}), 400
+
+        video_path = os.path.join(app.config['DATA_FOLDER'], video_filename)
+
+        if not os.path.exists(video_path):
+            return jsonify({'error': 'Video file not found'}), 404
+
+        # Get video information
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return jsonify({'error': 'Could not open video file'}), 500
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        duration = total_frames / fps if fps > 0 else 0
+        cap.release()
+
+        # Set up session for this video
+        session['video_info'] = {
+            'path': video_path,
+            'filename': video_filename,
+            'fps': fps,
+            'total_frames': total_frames,
+            'width': width,
+            'height': height,
+            'duration': duration
+        }
+
+        # Clear any existing session annotations since this is a data folder video
+        session['annotations'] = []
+
+        return jsonify({
+            'success': True,
+            'video_info': session['video_info']
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/get_frame/<int:frame_number>')
 def get_frame(frame_number):
     try:
         if 'video_info' not in session:
             return jsonify({'error': 'No video loaded'}), 400
-        
+
         video_path = session['video_info']['path']
         total_frames = session['video_info']['total_frames']
-        
+
         if frame_number < 0 or frame_number >= total_frames:
             return jsonify({'error': 'Invalid frame number'}), 400
-        
+
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             return jsonify({'error': 'Could not open video'}), 500
-        
+
         # Set to specific frame
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
         ret, frame = cap.read()
         cap.release()
-        
+
         if not ret:
             return jsonify({'error': 'Could not read frame'}), 500
-        
+
         # Convert frame to base64
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         frame_base64 = base64.b64encode(buffer).decode('utf-8')
-        
+
         return jsonify({
             'frame': f"data:image/jpeg;base64,{frame_base64}",
             'frame_number': frame_number,
             'time_seconds': frame_number / session['video_info']['fps']
         })
-        
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
